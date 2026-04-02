@@ -210,13 +210,14 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
     print(f"\n計算 55 天高點訊號（門檻：{threshold * 100:.1f}%）...")
     records = []
     ticker_to_info = stock_list.set_index("yf_ticker").to_dict("index")
+    today = datetime.now().strftime("%Y-%m-%d")
 
     for ticker, df in prices.items():
         signal = calculate_55day_signal(df)
         if signal is None:
             continue
         current_price, high_55d, ratio, high_55d_date = signal
-        if ratio < threshold or ratio >= 1.0:
+        if ratio < threshold or ratio >= 1.0 or high_55d_date == today:
             continue
 
         info = ticker_to_info.get(ticker, {})
