@@ -17,7 +17,7 @@ from pathlib import Path
 import pandas as pd
 import twstock
 import yfinance as yf
-from tabulate import tabulate
+
 from tqdm import tqdm
 
 BATCH_SIZE = 100
@@ -261,12 +261,12 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
 
 
 def print_table(df: pd.DataFrame) -> None:
-    """在 Console 顯示結果表格。"""
+    """輸出 TSV 格式，可直接複製貼上至 Google Sheets。"""
     display_cols = ["代號", "名稱", "產業", "市場", "現價", "MA5", "MA10", "MA20", "ATR20", "55天高點", "高點日期", "距高點%", "成交量", "趨勢", "近況"]
-    print("\n" + "=" * 60)
-    print(f"  篩選結果：共 {len(df)} 檔股票")
-    print("=" * 60)
-    print(tabulate(df[display_cols], headers="keys", tablefmt="simple", showindex=False))
+    print(f"\n篩選結果：共 {len(df)} 檔股票（複製以下內容貼至 Google Sheets）\n")
+    print("\t".join(display_cols))
+    for _, row in df[display_cols].iterrows():
+        print("\t".join(str(row[col]) for col in display_cols))
 
 
 def save_csv(df: pd.DataFrame, output_path: str) -> None:
