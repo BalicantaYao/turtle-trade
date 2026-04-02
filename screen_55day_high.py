@@ -13,84 +13,32 @@ import time
 from datetime import datetime
 
 import pandas as pd
-import requests
+import twstock
 import yfinance as yf
 from tabulate import tabulate
 from tqdm import tqdm
 
-TWSE_URL = "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2"
-TPEX_URL = "https://isin.twse.com.tw/isin/C_public.jsp?strMode=4"
-
 BATCH_SIZE = 100
 BATCH_SLEEP = 1.5  # seconds between yfinance batches
 
-# twstock market type 對應
 _TWSTOCK_MARKET_MAP = {
     "上市": ("TWSE", ".TW"),
     "上櫃": ("TPEX", ".TWO"),
 }
 
 
-def _fetch_from_isin(markets: list[str]) -> list[dict]:
-    """從 isin.twse.com.tw 爬取股票清單（原始方法）。"""
-    rows = []
-    market_configs = []
-    if "twse" in markets:
-        market_configs.append(("TWSE", TWSE_URL, ".TW"))
-    if "tpex" in markets:
-        market_configs.append(("TPEX", TPEX_URL, ".TWO"))
+def get_stock_list(markets: list[str]) -> pd.DataFrame:
+    """使用 twstock 取得上市/上櫃股票清單。
 
-    for market_name, url, suffix in market_configs:
-        print(f"取得 {market_name} 股票清單（isin）...")
-        try:
-            resp = requests.get(url, timeout=30)
-            resp.encoding = "big5"
-            tables = pd.read_html(resp.text, header=0)
-            df = tables[0]
-
-            df.columns = df.iloc[0]
-            df = df.iloc[1:].reset_index(drop=True)
-
-            code_col = "有價證券代號及名稱"
-            if code_col not in df.columns:
-                code_col = df.columns[0]
-
-            for _, row in df.iterrows():
-                cell = str(row.get(code_col, "")).strip()
-                if not cell or "\u3000" not in cell:
-                    continue
-                parts = cell.split("\u3000", 1)
-                if len(parts) != 2:
-                    continue
-                code, name = parts[0].strip(), parts[1].strip()
-                if not (code.isdigit() and len(code) == 4):
-                    continue
-                rows.append({
-                    "code": code,
-                    "name": name,
-                    "market": market_name,
-                    "yf_ticker": f"{code}{suffix}",
-                })
-        except Exception as e:
-            print(f"警告：取得 {market_name} 清單失敗 - {e}", file=sys.stderr)
-    return rows
-
-
-def _fetch_from_twstock(markets: list[str]) -> list[dict]:
-    """使用 twstock 函式庫取得股票清單。"""
-    try:
-        import twstock
-    except ImportError:
-        print("錯誤：請先安裝 twstock：pip install twstock", file=sys.stderr)
-        sys.exit(1)
-
+    Returns:
+        DataFrame with columns: code, name, market, yf_ticker
+    """
     print("取得股票清單（twstock）...")
     want_twse = "twse" in markets
     want_tpex = "tpex" in markets
 
     rows = []
     for code, info in twstock.codes.items():
-        # 只保留 4 位數字代碼
         if not (code.isdigit() and len(code) == 4):
             continue
         market_label = getattr(info, "market", "")
@@ -107,30 +55,13 @@ def _fetch_from_twstock(markets: list[str]) -> list[dict]:
             "market": market_name,
             "yf_ticker": f"{code}{suffix}",
         })
-    return rows
-
-
-def get_stock_list(markets: list[str], source: str = "isin") -> pd.DataFrame:
-    """取得上市/上櫃股票清單。
-
-    Args:
-        markets: 市場列表，可包含 "twse" 和/或 "tpex"
-        source:  資料來源，"isin"（預設）或 "twstock"
-
-    Returns:
-        DataFrame with columns: code, name, market, yf_ticker
-    """
-    if source == "twstock":
-        rows = _fetch_from_twstock(markets)
-    else:
-        rows = _fetch_from_isin(markets)
 
     if not rows:
         print("錯誤：無法取得任何股票清單", file=sys.stderr)
         sys.exit(1)
 
     result = pd.DataFrame(rows).drop_duplicates(subset="code").reset_index(drop=True)
-    print(f"共取得 {len(result)} 檔股票（{', '.join(markets).upper()}，來源：{source}）")
+    print(f"共取得 {len(result)} 檔股票（{', '.join(markets).upper()}）")
     return result
 
 
@@ -204,9 +135,9 @@ def calculate_55day_signal(df: pd.DataFrame) -> tuple[float, float, float] | Non
     return current_price, high_55d, ratio
 
 
-def screen_stocks(threshold: float, markets: list[str], source: str = "isin") -> pd.DataFrame:
+def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
     """主流程：取清單 → 批次抓價格 → 計算 55 天高點 → 篩選 → 排序。"""
-    stock_list = get_stock_list(markets, source=source)
+    stock_list = get_stock_list(markets)
     tickers = stock_list["yf_ticker"].tolist()
 
     print(f"\n下載歷史股價（共 {len(tickers)} 檔，每批 {BATCH_SIZE} 檔）...")
@@ -301,7 +232,6 @@ def main():
   python screen_55day_high.py --threshold 0.98
   python screen_55day_high.py --markets twse
   python screen_55day_high.py --threshold 0.95 --output my_results.csv
-  python screen_55day_high.py --source twstock
         """,
     )
     parser.add_argument(
@@ -323,12 +253,6 @@ def main():
         default=["twse", "tpex"],
         help="篩選市場：twse（上市）、tpex（上櫃），預設兩者皆選",
     )
-    parser.add_argument(
-        "--source",
-        choices=["isin", "twstock"],
-        default="isin",
-        help="股票清單來源：isin（預設，爬 isin.twse.com.tw）或 twstock（使用 twstock 函式庫）",
-    )
 
     args = parser.parse_args()
 
@@ -341,10 +265,9 @@ def main():
     print(f"台股 55 天高點篩選器")
     print(f"  市場：{', '.join(args.markets).upper()}")
     print(f"  門檻：現價 >= 55天高點 × {args.threshold * 100:.1f}%")
-    print(f"  來源：{args.source}")
     print(f"  輸出：{output_path}\n")
 
-    results = screen_stocks(threshold=args.threshold, markets=args.markets, source=args.source)
+    results = screen_stocks(threshold=args.threshold, markets=args.markets)
 
     if results.empty:
         print("\n沒有符合條件的股票。")
