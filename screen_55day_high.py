@@ -8,9 +8,11 @@
 """
 
 import argparse
+import pickle
 import sys
 import time
 from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 import twstock
@@ -20,6 +22,7 @@ from tqdm import tqdm
 
 BATCH_SIZE = 100
 BATCH_SLEEP = 1.5  # seconds between yfinance batches
+CACHE_PATH = Path(".prices_cache.pkl")
 
 _TWSTOCK_MARKET_MAP = {
     "上市": ("TWSE", ".TW"),
@@ -135,47 +138,67 @@ def calculate_55day_signal(df: pd.DataFrame) -> tuple[float, float, float] | Non
     return current_price, high_55d, ratio
 
 
+def _load_cache() -> dict | None:
+    """載入當日價格快取，若不存在或已過期則回傳 None。"""
+    if not CACHE_PATH.exists():
+        return None
+    cached = pickle.loads(CACHE_PATH.read_bytes())
+    if cached.get("date") != datetime.now().strftime("%Y-%m-%d"):
+        return None
+    print("使用今日快取股價資料。")
+    return cached["prices"]
+
+
+def _save_cache(prices: dict) -> None:
+    """將價格資料寫入快取檔。"""
+    CACHE_PATH.write_bytes(pickle.dumps({"date": datetime.now().strftime("%Y-%m-%d"), "prices": prices}))
+
+
 def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
     """主流程：取清單 → 批次抓價格 → 計算 55 天高點 → 篩選 → 排序。"""
     stock_list = get_stock_list(markets)
     tickers = stock_list["yf_ticker"].tolist()
 
-    print(f"\n下載歷史股價（共 {len(tickers)} 檔，每批 {BATCH_SIZE} 檔）...")
-    prices = {}
-    batches = range(0, len(tickers), BATCH_SIZE)
-    for i in tqdm(batches, desc="下載進度", unit="批"):
-        batch = tickers[i: i + BATCH_SIZE]
-        batch_str = " ".join(batch)
-        try:
-            raw = yf.download(
-                batch_str,
-                period="6mo",
-                auto_adjust=True,
-                progress=False,
-                threads=True,
-            )
-            if raw.empty:
-                continue
+    prices = _load_cache()
+    if prices is None:
+        print(f"\n下載歷史股價（共 {len(tickers)} 檔，每批 {BATCH_SIZE} 檔）...")
+        prices = {}
+        batches = range(0, len(tickers), BATCH_SIZE)
+        for i in tqdm(batches, desc="下載進度", unit="批"):
+            batch = tickers[i: i + BATCH_SIZE]
+            batch_str = " ".join(batch)
+            try:
+                raw = yf.download(
+                    batch_str,
+                    period="6mo",
+                    auto_adjust=True,
+                    progress=False,
+                    threads=True,
+                )
+                if raw.empty:
+                    continue
 
-            if isinstance(raw.columns, pd.MultiIndex):
-                for ticker in batch:
-                    try:
-                        high = raw["High"][ticker].dropna()
-                        close = raw["Close"][ticker].dropna()
-                        if len(high) > 0 and len(close) > 0:
-                            prices[ticker] = pd.DataFrame({"High": high, "Close": close})
-                    except KeyError:
-                        pass
-            else:
-                ticker = batch[0]
-                if "High" in raw.columns and "Close" in raw.columns:
-                    prices[ticker] = raw[["High", "Close"]].dropna()
+                if isinstance(raw.columns, pd.MultiIndex):
+                    for ticker in batch:
+                        try:
+                            high = raw["High"][ticker].dropna()
+                            close = raw["Close"][ticker].dropna()
+                            if len(high) > 0 and len(close) > 0:
+                                prices[ticker] = pd.DataFrame({"High": high, "Close": close})
+                        except KeyError:
+                            pass
+                else:
+                    ticker = batch[0]
+                    if "High" in raw.columns and "Close" in raw.columns:
+                        prices[ticker] = raw[["High", "Close"]].dropna()
 
-        except Exception as e:
-            tqdm.write(f"警告：批次 {i // BATCH_SIZE + 1} 下載失敗 - {e}")
+            except Exception as e:
+                tqdm.write(f"警告：批次 {i // BATCH_SIZE + 1} 下載失敗 - {e}")
 
-        if i + BATCH_SIZE < len(tickers):
-            time.sleep(BATCH_SLEEP)
+            if i + BATCH_SIZE < len(tickers):
+                time.sleep(BATCH_SLEEP)
+
+        _save_cache(prices)
 
     print(f"\n計算 55 天高點訊號（門檻：{threshold * 100:.1f}%）...")
     records = []

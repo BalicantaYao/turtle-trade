@@ -2,3 +2,4 @@ __pycache__/
 *.pyc
 *.pyo
 results_*.csv
+.prices_cache.pkl
