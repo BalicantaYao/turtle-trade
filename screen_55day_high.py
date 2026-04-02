@@ -116,14 +116,14 @@ def fetch_prices_batch(tickers: list[str], period: str = "6mo") -> dict[str, pd.
     return results
 
 
-def calculate_55day_signal(df: pd.DataFrame) -> tuple[float, float, float] | None:
+def calculate_55day_signal(df: pd.DataFrame) -> tuple[float, float, float, str] | None:
     """計算 55 天高點訊號。
 
     Args:
         df: DataFrame with columns High, Close (已按日期排序)
 
     Returns:
-        (current_price, high_55d, ratio) 或 None（資料不足 55 天）
+        (current_price, high_55d, ratio, high_55d_date) 或 None（資料不足 55 天）
     """
     if len(df) < 55:
         return None
@@ -136,7 +136,8 @@ def calculate_55day_signal(df: pd.DataFrame) -> tuple[float, float, float] | Non
         return None
 
     ratio = current_price / high_55d
-    return current_price, high_55d, ratio
+    high_55d_date = window["High"].idxmax().strftime("%Y-%m-%d")
+    return current_price, high_55d, ratio, high_55d_date
 
 
 def _load_cache() -> dict | None:
@@ -214,7 +215,7 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
         signal = calculate_55day_signal(df)
         if signal is None:
             continue
-        current_price, high_55d, ratio = signal
+        current_price, high_55d, ratio, high_55d_date = signal
         if ratio < threshold or ratio >= 1.0:
             continue
 
@@ -226,6 +227,7 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
             "市場": info.get("market", ""),
             "現價": round(current_price, 2),
             "55天高點": round(high_55d, 2),
+            "高點日期": high_55d_date,
             "距高點%": round(ratio * 100, 2),
             "成交量": int(df["Volume"].iloc[-1]) if "Volume" in df.columns else 0,
             "screened_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -240,7 +242,7 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
 
 def print_table(df: pd.DataFrame) -> None:
     """在 Console 顯示結果表格。"""
-    display_cols = ["代號", "名稱", "產業", "市場", "現價", "55天高點", "距高點%", "成交量"]
+    display_cols = ["代號", "名稱", "產業", "市場", "現價", "55天高點", "高點日期", "距高點%", "成交量"]
     print("\n" + "=" * 60)
     print(f"  篩選結果：共 {len(df)} 檔股票")
     print("=" * 60)
