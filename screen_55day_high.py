@@ -266,7 +266,7 @@ def print_table(df: pd.DataFrame) -> None:
     print("\n" + "=" * 60)
     print(f"  篩選結果：共 {len(df)} 檔股票")
     print("=" * 60)
-    print(tabulate(df[display_cols], headers="keys", tablefmt="simple", showindex=False))
+    print(tabulate(df[display_cols], headers="keys", tablefmt="pipe", showindex=False))
 
 
 def save_csv(df: pd.DataFrame, output_path: str) -> None:
