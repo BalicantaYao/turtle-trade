@@ -140,7 +140,14 @@ def calculate_55day_signal(df: pd.DataFrame) -> tuple[float, float, float, str] 
     ma5  = round(float(df["Close"].tail(5).mean()),  2)
     ma10 = round(float(df["Close"].tail(10).mean()), 2)
     ma20 = round(float(df["Close"].tail(20).mean()), 2)
-    return current_price, high_55d, ratio, high_55d_date, ma5, ma10, ma20
+    prev_close = df["Close"].shift(1)
+    tr = pd.concat([
+        df["High"] - df["Low"],
+        (df["High"] - prev_close).abs(),
+        (df["Low"]  - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    atr20 = round(float(tr.tail(20).mean()), 2)
+    return current_price, high_55d, ratio, high_55d_date, ma5, ma10, ma20, atr20
 
 
 def _load_cache() -> dict | None:
@@ -151,8 +158,8 @@ def _load_cache() -> dict | None:
     if cached.get("date") != datetime.now().strftime("%Y-%m-%d"):
         return None
     prices = cached["prices"]
-    # 若快取無 Volume 欄（舊格式），強制重新下載
-    if prices and "Volume" not in next(iter(prices.values())).columns:
+    # 若快取缺少必要欄位（舊格式），強制重新下載
+    if prices and not {"High", "Low", "Close", "Volume"}.issubset(next(iter(prices.values())).columns):
         return None
     print("使用今日快取股價資料。")
     return prices
@@ -191,16 +198,17 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
                     for ticker in batch:
                         try:
                             high = raw["High"][ticker].dropna()
+                            low = raw["Low"][ticker].dropna()
                             close = raw["Close"][ticker].dropna()
                             volume = raw["Volume"][ticker].dropna()
                             if len(high) > 0 and len(close) > 0:
-                                prices[ticker] = pd.DataFrame({"High": high, "Close": close, "Volume": volume})
+                                prices[ticker] = pd.DataFrame({"High": high, "Low": low, "Close": close, "Volume": volume})
                         except KeyError:
                             pass
                 else:
                     ticker = batch[0]
                     if "High" in raw.columns and "Close" in raw.columns:
-                        prices[ticker] = raw[["High", "Close", "Volume"]].dropna()
+                        prices[ticker] = raw[["High", "Low", "Close", "Volume"]].dropna()
 
             except Exception as e:
                 tqdm.write(f"警告：批次 {i // BATCH_SIZE + 1} 下載失敗 - {e}")
@@ -219,7 +227,7 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
         signal = calculate_55day_signal(df)
         if signal is None:
             continue
-        current_price, high_55d, ratio, high_55d_date, ma5, ma10, ma20 = signal
+        current_price, high_55d, ratio, high_55d_date, ma5, ma10, ma20, atr20 = signal
         if ratio < threshold or ratio >= 1.0 or high_55d_date == today:
             continue
 
@@ -233,9 +241,10 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
             "55天高點": round(high_55d, 2),
             "高點日期": high_55d_date,
             "距高點%": round(ratio * 100, 2),
-            "MA5":  ma5,
-            "MA10": ma10,
-            "MA20": ma20,
+            "MA5":   ma5,
+            "MA10":  ma10,
+            "MA20":  ma20,
+            "ATR20": atr20,
             "成交量": int(df["Volume"].iloc[-1]) if "Volume" in df.columns else 0,
             "趨勢": "多頭排列" if current_price > ma5 > ma10 > ma20 else "",
             "screened_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -250,7 +259,7 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
 
 def print_table(df: pd.DataFrame) -> None:
     """在 Console 顯示結果表格。"""
-    display_cols = ["代號", "名稱", "產業", "市場", "現價", "MA5", "MA10", "MA20", "55天高點", "高點日期", "距高點%", "成交量", "趨勢"]
+    display_cols = ["代號", "名稱", "產業", "市場", "現價", "MA5", "MA10", "MA20", "ATR20", "55天高點", "高點日期", "距高點%", "成交量", "趨勢"]
     print("\n" + "=" * 60)
     print(f"  篩選結果：共 {len(df)} 檔股票")
     print("=" * 60)
