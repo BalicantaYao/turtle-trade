@@ -55,6 +55,7 @@ def get_stock_list(markets: list[str]) -> pd.DataFrame:
         rows.append({
             "code": code,
             "name": getattr(info, "name", ""),
+            "industry": getattr(info, "group", ""),
             "market": market_name,
             "yf_ticker": f"{code}{suffix}",
         })
@@ -216,6 +217,7 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
         records.append({
             "代號": info.get("code", ticker),
             "名稱": info.get("name", ""),
+            "產業": info.get("industry", ""),
             "市場": info.get("market", ""),
             "現價": round(current_price, 2),
             "55天高點": round(high_55d, 2),
@@ -232,7 +234,7 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
 
 def print_table(df: pd.DataFrame) -> None:
     """在 Console 顯示結果表格。"""
-    display_cols = ["代號", "名稱", "市場", "現價", "55天高點", "距高點%"]
+    display_cols = ["代號", "名稱", "產業", "市場", "現價", "55天高點", "距高點%"]
     print("\n" + "=" * 60)
     print(f"  篩選結果：共 {len(df)} 檔股票")
     print("=" * 60)
