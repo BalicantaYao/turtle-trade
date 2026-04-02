@@ -146,8 +146,12 @@ def _load_cache() -> dict | None:
     cached = pickle.loads(CACHE_PATH.read_bytes())
     if cached.get("date") != datetime.now().strftime("%Y-%m-%d"):
         return None
+    prices = cached["prices"]
+    # 若快取無 Volume 欄（舊格式），強制重新下載
+    if prices and "Volume" not in next(iter(prices.values())).columns:
+        return None
     print("使用今日快取股價資料。")
-    return cached["prices"]
+    return prices
 
 
 def _save_cache(prices: dict) -> None:
@@ -184,14 +188,15 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
                         try:
                             high = raw["High"][ticker].dropna()
                             close = raw["Close"][ticker].dropna()
+                            volume = raw["Volume"][ticker].dropna()
                             if len(high) > 0 and len(close) > 0:
-                                prices[ticker] = pd.DataFrame({"High": high, "Close": close})
+                                prices[ticker] = pd.DataFrame({"High": high, "Close": close, "Volume": volume})
                         except KeyError:
                             pass
                 else:
                     ticker = batch[0]
                     if "High" in raw.columns and "Close" in raw.columns:
-                        prices[ticker] = raw[["High", "Close"]].dropna()
+                        prices[ticker] = raw[["High", "Close", "Volume"]].dropna()
 
             except Exception as e:
                 tqdm.write(f"警告：批次 {i // BATCH_SIZE + 1} 下載失敗 - {e}")
@@ -222,6 +227,7 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
             "現價": round(current_price, 2),
             "55天高點": round(high_55d, 2),
             "距高點%": round(ratio * 100, 2),
+            "成交量": int(df["Volume"].iloc[-1]) if "Volume" in df.columns else 0,
             "screened_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         })
 
@@ -234,7 +240,7 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
 
 def print_table(df: pd.DataFrame) -> None:
     """在 Console 顯示結果表格。"""
-    display_cols = ["代號", "名稱", "產業", "市場", "現價", "55天高點", "距高點%"]
+    display_cols = ["代號", "名稱", "產業", "市場", "現價", "55天高點", "距高點%", "成交量"]
     print("\n" + "=" * 60)
     print(f"  篩選結果：共 {len(df)} 檔股票")
     print("=" * 60)
