@@ -116,27 +116,29 @@ def fetch_prices_batch(tickers: list[str], period: str = "6mo") -> dict[str, pd.
     return results
 
 
-def calculate_55day_signal(df: pd.DataFrame) -> tuple[float, float, float, str] | None:
-    """計算 55 天高點訊號。
+def calculate_signal(df: pd.DataFrame, period: int) -> tuple | None:
+    """計算 N 天高點訊號。
 
     Args:
-        df: DataFrame with columns High, Close (已按日期排序)
+        df:     DataFrame with columns High, Low, Close（已按日期排序）
+        period: 回顧天數（例如 20 或 55）
 
     Returns:
-        (current_price, high_55d, ratio, high_55d_date) 或 None（資料不足 55 天）
+        (current_price, high_nd, ratio, high_nd_date, ma5, ma10, ma20, atr20, recent_high)
+        或 None（資料不足 period 天）
     """
-    if len(df) < 55:
+    if len(df) < period:
         return None
 
-    window = df.tail(55)
-    high_55d = float(window["High"].max())
+    window = df.tail(period)
+    high_nd = float(window["High"].max())
     current_price = float(df["Close"].iloc[-1])
 
-    if high_55d <= 0:
+    if high_nd <= 0:
         return None
 
-    ratio = current_price / high_55d
-    high_55d_date = window["High"].idxmax().strftime("%Y-%m-%d")
+    ratio = current_price / high_nd
+    high_nd_date = window["High"].idxmax().strftime("%Y-%m-%d")
     ma5  = round(float(df["Close"].tail(5).mean()),  2)
     ma10 = round(float(df["Close"].tail(10).mean()), 2)
     ma20 = round(float(df["Close"].tail(20).mean()), 2)
@@ -148,8 +150,8 @@ def calculate_55day_signal(df: pd.DataFrame) -> tuple[float, float, float, str] 
     ], axis=1).max(axis=1)
     atr20 = round(float(tr.tail(20).mean()), 2)
     last_10_dates = set(df.index[-10:].strftime("%Y-%m-%d"))
-    recent_high = high_55d_date in last_10_dates
-    return current_price, high_55d, ratio, high_55d_date, ma5, ma10, ma20, atr20, recent_high
+    recent_high = high_nd_date in last_10_dates
+    return current_price, high_nd, ratio, high_nd_date, ma5, ma10, ma20, atr20, recent_high
 
 
 def _load_cache() -> dict | None:
@@ -172,8 +174,8 @@ def _save_cache(prices: dict) -> None:
     CACHE_PATH.write_bytes(pickle.dumps({"date": datetime.now().strftime("%Y-%m-%d"), "prices": prices}))
 
 
-def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
-    """主流程：取清單 → 批次抓價格 → 計算 55 天高點 → 篩選 → 排序。"""
+def screen_stocks(threshold: float, markets: list[str], period: int = 55) -> pd.DataFrame:
+    """主流程：取清單 → 批次抓價格 → 計算 N 天高點 → 篩選 → 排序。"""
     stock_list = get_stock_list(markets)
     tickers = stock_list["yf_ticker"].tolist()
 
@@ -220,18 +222,25 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
 
         _save_cache(prices)
 
-    print(f"\n計算 55 天高點訊號（門檻：{threshold * 100:.1f}%）...")
+    high_col = f"{period}天高點"
+    print(f"\n計算 {period} 天高點訊號（門檻：{threshold * 100:.1f}%）...")
     records = []
     ticker_to_info = stock_list.set_index("yf_ticker").to_dict("index")
     today = datetime.now().strftime("%Y-%m-%d")
 
     for ticker, df in prices.items():
-        signal = calculate_55day_signal(df)
+        signal = calculate_signal(df, period)
         if signal is None:
             continue
-        current_price, high_55d, ratio, high_55d_date, ma5, ma10, ma20, atr20, recent_high = signal
-        if ratio < threshold or ratio >= 1.0 or high_55d_date == today:
+        current_price, high_nd, ratio, high_nd_date, ma5, ma10, ma20, atr20, recent_high = signal
+        if ratio < threshold or ratio >= 1.0 or high_nd_date == today:
             continue
+
+        # 20日模式：排除同時符合55日高點門檻的股票
+        if period == 20 and len(df) >= 55:
+            high_55 = float(df.tail(55)["High"].max())
+            if high_55 > 0 and current_price / high_55 >= threshold:
+                continue
 
         info = ticker_to_info.get(ticker, {})
         records.append({
@@ -240,8 +249,8 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
             "產業": info.get("industry", ""),
             "市場": info.get("market", ""),
             "現價": round(current_price, 2),
-            "55天高點": round(high_55d, 2),
-            "高點日期": high_55d_date,
+            high_col: round(high_nd, 2),
+            "高點日期": high_nd_date,
             "距高點%": round(ratio * 100, 2),
             "MA5":   ma5,
             "MA10":  ma10,
@@ -250,11 +259,11 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
             "成交量": int(df["Volume"].iloc[-1]) if "Volume" in df.columns else 0,
             "趨勢": "多頭排列" if current_price > ma5 > ma10 > ma20 else "",
             "近況": "十天創高中" if recent_high else "",
-            "入手價":    round(high_55d, 2),
-            "停損價":    round(high_55d - 2 * atr20, 2),
-            "第一次加碼": round(high_55d + 0.5 * atr20, 2),
-            "第二次加碼": round(high_55d + 1.0 * atr20, 2),
-            "第三次加碼": round(high_55d + 1.5 * atr20, 2),
+            "入手價":    round(high_nd, 2),
+            "停損價":    round(high_nd - 2 * atr20, 2),
+            "第一次加碼": round(high_nd + 0.5 * atr20, 2),
+            "第二次加碼": round(high_nd + 1.0 * atr20, 2),
+            "第三次加碼": round(high_nd + 1.5 * atr20, 2),
             "screened_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         })
 
@@ -265,9 +274,10 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
     return result
 
 
-def print_table(df: pd.DataFrame) -> None:
+def print_table(df: pd.DataFrame, period: int = 55) -> None:
     """在 Console 顯示結果表格。"""
-    display_cols = ["代號", "名稱", "產業", "市場", "現價", "MA5", "MA10", "MA20", "ATR20", "55天高點", "高點日期", "距高點%", "成交量", "趨勢", "近況", "入手價", "停損價", "第一次加碼", "第二次加碼", "第三次加碼"]
+    high_col = f"{period}天高點"
+    display_cols = ["代號", "名稱", "產業", "市場", "現價", "MA5", "MA10", "MA20", "ATR20", high_col, "高點日期", "距高點%", "成交量", "趨勢", "近況", "入手價", "停損價", "第一次加碼", "第二次加碼", "第三次加碼"]
     print("\n" + "=" * 60)
     print(f"  篩選結果：共 {len(df)} 檔股票")
     print("=" * 60)
@@ -282,21 +292,29 @@ def save_csv(df: pd.DataFrame, output_path: str) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="台股 55 天高點篩選器（海龜交易法）",
+        description="台股高點篩選器（海龜交易法）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 範例:
   python screen_55day_high.py
+  python screen_55day_high.py --period 20
   python screen_55day_high.py --threshold 0.98
   python screen_55day_high.py --markets twse
   python screen_55day_high.py --threshold 0.95 --output my_results.csv
         """,
     )
     parser.add_argument(
+        "--period",
+        type=int,
+        choices=[20, 55],
+        default=55,
+        help="高點回顧天數：55（預設）或 20。20日模式會自動排除同時符合55日門檻的股票",
+    )
+    parser.add_argument(
         "--threshold",
         type=float,
         default=0.95,
-        help="篩選門檻：現價 / 55天高點 >= 此值（預設 0.95，即 95%%）",
+        help="篩選門檻：現價 / N天高點 >= 此值（預設 0.95，即 95%%）",
     )
     parser.add_argument(
         "--output",
@@ -318,19 +336,21 @@ def main():
         print("錯誤：threshold 需介於 0 到 1 之間", file=sys.stderr)
         sys.exit(1)
 
-    output_path = args.output or f"results_{datetime.now().strftime('%Y%m%d')}.csv"
+    output_path = args.output or f"results_{args.period}d_{datetime.now().strftime('%Y%m%d')}.csv"
 
-    print(f"台股 55 天高點篩選器")
+    print(f"台股 {args.period} 天高點篩選器")
     print(f"  市場：{', '.join(args.markets).upper()}")
-    print(f"  門檻：現價 >= 55天高點 × {args.threshold * 100:.1f}%")
+    print(f"  門檻：現價 >= {args.period}天高點 × {args.threshold * 100:.1f}%")
+    if args.period == 20:
+        print(f"  模式：排除同時符合55日高點門檻的股票")
     print(f"  輸出：{output_path}\n")
 
-    results = screen_stocks(threshold=args.threshold, markets=args.markets)
+    results = screen_stocks(threshold=args.threshold, markets=args.markets, period=args.period)
 
     if results.empty:
         print("\n沒有符合條件的股票。")
     else:
-        print_table(results)
+        print_table(results, period=args.period)
         save_csv(results, output_path)
 
 
