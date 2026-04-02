@@ -210,7 +210,7 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
         if signal is None:
             continue
         current_price, high_55d, ratio = signal
-        if ratio < threshold:
+        if ratio < threshold or ratio >= 1.0:
             continue
 
         info = ticker_to_info.get(ticker, {})
@@ -228,7 +228,7 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
     if not records:
         return pd.DataFrame()
 
-    result = pd.DataFrame(records).sort_values("距高點%", ascending=False).reset_index(drop=True)
+    result = pd.DataFrame(records).sort_values(["產業", "距高點%"], ascending=[True, False]).reset_index(drop=True)
     return result
 
 
