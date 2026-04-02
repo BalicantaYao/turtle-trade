@@ -147,7 +147,9 @@ def calculate_55day_signal(df: pd.DataFrame) -> tuple[float, float, float, str] 
         (df["Low"]  - prev_close).abs(),
     ], axis=1).max(axis=1)
     atr20 = round(float(tr.tail(20).mean()), 2)
-    return current_price, high_55d, ratio, high_55d_date, ma5, ma10, ma20, atr20
+    last_10_dates = set(df.index[-10:].strftime("%Y-%m-%d"))
+    recent_high = high_55d_date in last_10_dates
+    return current_price, high_55d, ratio, high_55d_date, ma5, ma10, ma20, atr20, recent_high
 
 
 def _load_cache() -> dict | None:
@@ -227,7 +229,7 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
         signal = calculate_55day_signal(df)
         if signal is None:
             continue
-        current_price, high_55d, ratio, high_55d_date, ma5, ma10, ma20, atr20 = signal
+        current_price, high_55d, ratio, high_55d_date, ma5, ma10, ma20, atr20, recent_high = signal
         if ratio < threshold or ratio >= 1.0 or high_55d_date == today:
             continue
 
@@ -247,6 +249,7 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
             "ATR20": atr20,
             "成交量": int(df["Volume"].iloc[-1]) if "Volume" in df.columns else 0,
             "趨勢": "多頭排列" if current_price > ma5 > ma10 > ma20 else "",
+            "近況": "十天創高中" if recent_high else "",
             "screened_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         })
 
@@ -259,7 +262,7 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
 
 def print_table(df: pd.DataFrame) -> None:
     """在 Console 顯示結果表格。"""
-    display_cols = ["代號", "名稱", "產業", "市場", "現價", "MA5", "MA10", "MA20", "ATR20", "55天高點", "高點日期", "距高點%", "成交量", "趨勢"]
+    display_cols = ["代號", "名稱", "產業", "市場", "現價", "MA5", "MA10", "MA20", "ATR20", "55天高點", "高點日期", "距高點%", "成交量", "趨勢", "近況"]
     print("\n" + "=" * 60)
     print(f"  篩選結果：共 {len(df)} 檔股票")
     print("=" * 60)
