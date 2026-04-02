@@ -250,6 +250,11 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
             "成交量": int(df["Volume"].iloc[-1]) if "Volume" in df.columns else 0,
             "趨勢": "多頭排列" if current_price > ma5 > ma10 > ma20 else "",
             "近況": "十天創高中" if recent_high else "",
+            "入手價":    round(high_55d, 2),
+            "停損價":    round(high_55d - 2 * atr20, 2),
+            "第一次加碼": round(high_55d + 0.5 * atr20, 2),
+            "第二次加碼": round(high_55d + 1.0 * atr20, 2),
+            "第三次加碼": round(high_55d + 1.5 * atr20, 2),
             "screened_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         })
 
@@ -262,7 +267,7 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
 
 def print_table(df: pd.DataFrame) -> None:
     """在 Console 顯示結果表格。"""
-    display_cols = ["代號", "名稱", "產業", "市場", "現價", "MA5", "MA10", "MA20", "ATR20", "55天高點", "高點日期", "距高點%", "成交量", "趨勢", "近況"]
+    display_cols = ["代號", "名稱", "產業", "市場", "現價", "MA5", "MA10", "MA20", "ATR20", "55天高點", "高點日期", "距高點%", "成交量", "趨勢", "近況", "入手價", "停損價", "第一次加碼", "第二次加碼", "第三次加碼"]
     print("\n" + "=" * 60)
     print(f"  篩選結果：共 {len(df)} 檔股票")
     print("=" * 60)
