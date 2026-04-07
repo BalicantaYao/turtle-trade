@@ -146,9 +146,6 @@ def screen_stocks(markets: list[str]) -> pd.DataFrame:
 
         code   = info.get("code", ticker)
         market = info.get("market", "")
-        tv_prefix = "TWSE" if market == "上市" else "TPEX"
-        tv_url = f"https://www.tradingview.com/chart/?symbol={tv_prefix}:{code}"
-
         records.append({
             "代號": code,
             "名稱": info.get("name", ""),
@@ -159,7 +156,7 @@ def screen_stocks(markets: list[str]) -> pd.DataFrame:
             "60MA": round(ma60, 2),
             "120MA": round(ma120, 2),
             "價格/5MA%": round(price / ma5 * 100, 2),
-            "TradingView": tv_url,
+            "圖表": f"https://www.wantgoo.com/stock/{code}/technical-chart",
             "screened_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         })
 
@@ -174,7 +171,7 @@ def screen_stocks(markets: list[str]) -> pd.DataFrame:
 
 
 def print_table(df: pd.DataFrame) -> None:
-    display_cols = ["代號", "名稱", "市場", "現價", "5MA", "20MA", "60MA", "120MA", "價格/5MA%", "TradingView"]
+    display_cols = ["代號", "名稱", "市場", "現價", "5MA", "20MA", "60MA", "120MA", "價格/5MA%", "圖表"]
     print("\n" + "=" * 75)
     print(f"  篩選結果：共 {len(df)} 檔股票")
     print(f"  條件：20MA 向上、股價 < 5MA、20MA > 60MA、60MA > 120MA")
