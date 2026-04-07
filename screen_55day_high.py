@@ -156,8 +156,51 @@ def calculate_55day_signal(df: pd.DataFrame) -> tuple[float, float, float] | Non
     return current_price, high_55d, ratio
 
 
-def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
-    """主流程：取清單 → 批次抓價格 → 計算 55 天高點 → 篩選 → 排序。"""
+def calculate_ma_signal(
+    df: pd.DataFrame, ma_lookback: int = 5
+) -> tuple[float, float, bool, bool] | None:
+    """計算均線訊號（5MA 與 20MA）。
+
+    Args:
+        df: DataFrame with column Close (已按日期排序)
+        ma_lookback: 判斷 20MA 向上所回溯的天數（預設 5）
+
+    Returns:
+        (ma5, ma20, ma20_rising, price_below_ma5) 或 None（資料不足）
+        - ma5: 最新 5 日均線
+        - ma20: 最新 20 日均線
+        - ma20_rising: 20MA 是否向上（今日 20MA > ma_lookback 天前 20MA）
+        - price_below_ma5: 當前收盤價是否低於 5MA
+    """
+    min_required = 20 + ma_lookback
+    if len(df) < min_required:
+        return None
+
+    close = df["Close"]
+    ma5_series = close.rolling(window=5).mean()
+    ma20_series = close.rolling(window=20).mean()
+
+    ma5 = float(ma5_series.iloc[-1])
+    ma20_now = float(ma20_series.iloc[-1])
+    ma20_prev = float(ma20_series.iloc[-(ma_lookback + 1)])
+
+    current_price = float(close.iloc[-1])
+    ma20_rising = ma20_now > ma20_prev
+    price_below_ma5 = current_price < ma5
+
+    return ma5, ma20_now, ma20_rising, price_below_ma5
+
+
+def screen_stocks(
+    threshold: float, markets: list[str], ma_filter: bool = False
+) -> pd.DataFrame:
+    """主流程：取清單 → 批次抓價格 → 計算 55 天高點 → 篩選 → 排序。
+
+    Args:
+        threshold: 現價 / 55天高點 門檻
+        markets: 篩選市場
+        ma_filter: 是否啟用 MA 篩選（20MA 向上且股價在 5MA 之下）
+    """
     stock_list = get_stock_list(markets)
     tickers = stock_list["yf_ticker"].tolist()
 
@@ -198,7 +241,10 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
         if i + BATCH_SIZE < len(tickers):
             time.sleep(BATCH_SLEEP)
 
-    print(f"\n計算 55 天高點訊號（門檻：{threshold * 100:.1f}%）...")
+    filter_desc = f"門檻：{threshold * 100:.1f}%"
+    if ma_filter:
+        filter_desc += "，20MA 向上且股價 < 5MA"
+    print(f"\n計算 55 天高點訊號（{filter_desc}）...")
     records = []
     ticker_to_info = stock_list.set_index("yf_ticker").to_dict("index")
 
@@ -210,16 +256,31 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
         if ratio < threshold:
             continue
 
+        ma_signal = calculate_ma_signal(df)
+        if ma_filter:
+            if ma_signal is None:
+                continue
+            _, _, ma20_rising, price_below_ma5 = ma_signal
+            if not (ma20_rising and price_below_ma5):
+                continue
+
         info = ticker_to_info.get(ticker, {})
-        records.append({
+        record = {
             "代號": info.get("code", ticker),
             "名稱": info.get("name", ""),
             "市場": info.get("market", ""),
             "現價": round(current_price, 2),
             "55天高點": round(high_55d, 2),
             "距高點%": round(ratio * 100, 2),
-            "screened_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        })
+        }
+        if ma_signal is not None:
+            ma5, ma20, ma20_rising, price_below_ma5 = ma_signal
+            record["5MA"] = round(ma5, 2)
+            record["20MA"] = round(ma20, 2)
+            record["20MA向上"] = "是" if ma20_rising else "否"
+            record["價格<5MA"] = "是" if price_below_ma5 else "否"
+        record["screened_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        records.append(record)
 
     if not records:
         return pd.DataFrame()
@@ -230,10 +291,12 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
 
 def print_table(df: pd.DataFrame) -> None:
     """在 Console 顯示結果表格。"""
-    display_cols = ["代號", "名稱", "市場", "現價", "55天高點", "距高點%"]
-    print("\n" + "=" * 60)
+    base_cols = ["代號", "名稱", "市場", "現價", "55天高點", "距高點%"]
+    ma_cols = ["5MA", "20MA", "20MA向上", "價格<5MA"]
+    display_cols = base_cols + [c for c in ma_cols if c in df.columns]
+    print("\n" + "=" * 70)
     print(f"  篩選結果：共 {len(df)} 檔股票")
-    print("=" * 60)
+    print("=" * 70)
     print(tabulate(df[display_cols], headers="keys", tablefmt="simple", index=False))
 
 
@@ -253,6 +316,8 @@ def main():
   python screen_55day_high.py --threshold 0.98
   python screen_55day_high.py --markets twse
   python screen_55day_high.py --threshold 0.95 --output my_results.csv
+  python screen_55day_high.py --ma-filter
+  python screen_55day_high.py --threshold 0.95 --ma-filter --output ma_results.csv
         """,
     )
     parser.add_argument(
@@ -274,6 +339,12 @@ def main():
         default=["twse", "tpex"],
         help="篩選市場：twse（上市）、tpex（上櫃），預設兩者皆選",
     )
+    parser.add_argument(
+        "--ma-filter",
+        action="store_true",
+        default=False,
+        help="啟用均線篩選：20MA 向上（今日 20MA > 5日前 20MA）且股價低於 5MA",
+    )
 
     args = parser.parse_args()
 
@@ -286,9 +357,11 @@ def main():
     print(f"台股 55 天高點篩選器")
     print(f"  市場：{', '.join(args.markets).upper()}")
     print(f"  門檻：現價 >= 55天高點 × {args.threshold * 100:.1f}%")
+    if args.ma_filter:
+        print(f"  均線篩選：20MA 向上 且 股價 < 5MA")
     print(f"  輸出：{output_path}\n")
 
-    results = screen_stocks(threshold=args.threshold, markets=args.markets)
+    results = screen_stocks(threshold=args.threshold, markets=args.markets, ma_filter=args.ma_filter)
 
     if results.empty:
         print("\n沒有符合條件的股票。")
