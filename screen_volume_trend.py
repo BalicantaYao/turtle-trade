@@ -14,9 +14,11 @@
 """
 
 import argparse
+import pickle
 import sys
 import time
-from datetime import datetime
+from datetime import date, datetime
+from pathlib import Path
 
 import pandas as pd
 import twstock
@@ -26,6 +28,7 @@ from tqdm import tqdm
 
 BATCH_SIZE = 100
 BATCH_SLEEP = 1.5  # seconds between yfinance batches
+CACHE_DIR = Path(".cache")
 
 
 def get_stock_list(markets: list[str]) -> pd.DataFrame:
@@ -70,6 +73,28 @@ def get_stock_list(markets: list[str]) -> pd.DataFrame:
     result = pd.DataFrame(rows).drop_duplicates(subset="code").reset_index(drop=True)
     print(f"共取得 {len(result)} 檔股票（{', '.join(markets).upper()}）")
     return result
+
+
+def _cache_path(markets: list[str]) -> Path:
+    key = "_".join(sorted(markets))
+    return CACHE_DIR / f"prices_{date.today():%Y%m%d}_{key}.pkl"
+
+
+def load_cache(markets: list[str]) -> dict[str, pd.DataFrame] | None:
+    path = _cache_path(markets)
+    if path.exists():
+        print(f"載入今日快取：{path}")
+        with open(path, "rb") as f:
+            return pickle.load(f)
+    return None
+
+
+def save_cache(prices: dict[str, pd.DataFrame], markets: list[str]) -> None:
+    CACHE_DIR.mkdir(exist_ok=True)
+    path = _cache_path(markets)
+    with open(path, "wb") as f:
+        pickle.dump(prices, f)
+    print(f"快取已儲存：{path}")
 
 
 def fetch_prices_batch(tickers: list[str]) -> dict[str, pd.DataFrame]:
@@ -182,8 +207,13 @@ def screen_stocks(volume_ratio: float, markets: list[str]) -> pd.DataFrame:
     stock_list = get_stock_list(markets)
     tickers = stock_list["yf_ticker"].tolist()
 
-    print(f"\n下載歷史股價（共 {len(tickers)} 檔，每批 {BATCH_SIZE} 檔）...")
-    prices = fetch_prices_batch(tickers)
+    prices = load_cache(markets)
+    if prices is None:
+        print(f"\n下載歷史股價（共 {len(tickers)} 檔，每批 {BATCH_SIZE} 檔）...")
+        prices = fetch_prices_batch(tickers)
+        save_cache(prices, markets)
+    else:
+        print(f"使用快取資料（共 {len(prices)} 檔），略過下載。")
 
     print(f"\n計算量增 + 均線訊號（量比門檻：{volume_ratio}x）...")
     records = []
