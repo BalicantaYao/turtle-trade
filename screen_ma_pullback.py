@@ -16,69 +16,48 @@ import time
 from datetime import datetime
 
 import pandas as pd
-import requests
+import twstock
 import yfinance as yf
 from tabulate import tabulate
 from tqdm import tqdm
-
-TWSE_URL = "https://isin.twse.com.tw/isin/C_public.jsp?strMode=2"
-TPEX_URL = "https://isin.twse.com.tw/isin/C_public.jsp?strMode=4"
 
 BATCH_SIZE = 100
 BATCH_SLEEP = 1.5
 
 
 def get_stock_list(markets: list[str]) -> pd.DataFrame:
-    """從 isin.twse.com.tw 取得上市/上櫃股票清單。
+    """使用 twstock 取得上市/上櫃普通股清單。
 
     Returns:
         DataFrame: columns = [code, name, market, yf_ticker]
     """
+    market_map = {
+        "twse": ("上市", ".TW"),
+        "tpex": ("上櫃", ".TWO"),
+    }
+
     rows = []
-    market_configs = []
-    if "twse" in markets:
-        market_configs.append(("TWSE", TWSE_URL, ".TW"))
-    if "tpex" in markets:
-        market_configs.append(("TPEX", TPEX_URL, ".TWO"))
-
-    for market_name, url, suffix in market_configs:
-        print(f"取得 {market_name} 股票清單...")
-        try:
-            resp = requests.get(url, timeout=30)
-            resp.encoding = "big5"
-            tables = pd.read_html(resp.text, header=0)
-            df = tables[0]
-            df.columns = df.iloc[0]
-            df = df.iloc[1:].reset_index(drop=True)
-
-            code_col = "有價證券代號及名稱"
-            if code_col not in df.columns:
-                code_col = df.columns[0]
-
-            for _, row in df.iterrows():
-                cell = str(row.get(code_col, "")).strip()
-                if not cell or "\u3000" not in cell:
-                    continue
-                parts = cell.split("\u3000", 1)
-                if len(parts) != 2:
-                    continue
-                code, name = parts[0].strip(), parts[1].strip()
-                if not (code.isdigit() and len(code) == 4):
-                    continue
+    for market_key in markets:
+        market_label, suffix = market_map[market_key]
+        for code, info in twstock.codes.items():
+            if (
+                code.isdigit()
+                and len(code) == 4
+                and info.type == "股票"
+                and info.market == market_label
+            ):
                 rows.append({
                     "code": code,
-                    "name": name,
-                    "market": market_name,
+                    "name": info.name,
+                    "market": market_label,
                     "yf_ticker": f"{code}{suffix}",
                 })
-        except Exception as e:
-            print(f"警告：取得 {market_name} 清單失敗 - {e}", file=sys.stderr)
 
     if not rows:
         print("錯誤：無法取得任何股票清單", file=sys.stderr)
         sys.exit(1)
 
-    result = pd.DataFrame(rows).drop_duplicates(subset="code").reset_index(drop=True)
+    result = pd.DataFrame(rows).sort_values("code").reset_index(drop=True)
     print(f"共取得 {len(result)} 檔股票（{', '.join(markets).upper()}）")
     return result
 
