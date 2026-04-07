@@ -3,4 +3,5 @@ __pycache__/
 *.pyo
 results_*.csv
 volume_trend_*.csv
+ma5_breakout_*.csv
 .cache/
