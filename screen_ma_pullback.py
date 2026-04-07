@@ -164,7 +164,7 @@ def print_table(df: pd.DataFrame) -> None:
     print("\n" + "=" * 65)
     print(f"  篩選結果：共 {len(df)} 檔股票（20MA 向上 且 股價 < 5MA）")
     print("=" * 65)
-    print(tabulate(df[display_cols], headers="keys", tablefmt="simple", index=False))
+    print(tabulate(df[display_cols], headers="keys", tablefmt="simple", showindex=False))
 
 
 def save_csv(df: pd.DataFrame, path: str) -> None:
