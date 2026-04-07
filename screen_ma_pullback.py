@@ -71,16 +71,20 @@ def check_ma_pullback(close: pd.Series) -> bool:
     Returns:
         True 表示符合條件，False 則否
     """
-    if len(close) < 25:
+    if len(close) < 125:  # 120MA 需要至少 120 筆，加緩衝至 125
         return False
 
-    ma5 = close.rolling(5).mean()
+    ma5  = close.rolling(5).mean()
     ma20 = close.rolling(20).mean()
+    ma60 = close.rolling(60).mean()
+    ma120 = close.rolling(120).mean()
 
-    ma20_rising = float(ma20.iloc[-1]) > float(ma20.iloc[-6])   # 今日 > 5日前
-    price_below_ma5 = float(close.iloc[-1]) < float(ma5.iloc[-1])
+    ma20_rising      = float(ma20.iloc[-1]) > float(ma20.iloc[-6])   # 20MA 向上（今日 > 5日前）
+    price_below_ma5  = float(close.iloc[-1]) < float(ma5.iloc[-1])   # 股價 < 5MA
+    ma20_above_ma60  = float(ma20.iloc[-1]) > float(ma60.iloc[-1])   # 20MA > 60MA
+    ma60_above_ma120 = float(ma60.iloc[-1]) > float(ma120.iloc[-1])  # 60MA > 120MA
 
-    return ma20_rising and price_below_ma5
+    return ma20_rising and price_below_ma5 and ma20_above_ma60 and ma60_above_ma120
 
 
 def screen_stocks(markets: list[str]) -> pd.DataFrame:
@@ -96,7 +100,7 @@ def screen_stocks(markets: list[str]) -> pd.DataFrame:
         try:
             raw = yf.download(
                 " ".join(batch),
-                period="3mo",
+                period="8mo",
                 auto_adjust=True,
                 progress=False,
                 threads=True,
@@ -108,7 +112,7 @@ def screen_stocks(markets: list[str]) -> pd.DataFrame:
                 for ticker in batch:
                     try:
                         s = raw["Close"][ticker].dropna()
-                        if len(s) >= 25:
+                        if len(s) >= 125:
                             prices[ticker] = s
                     except KeyError:
                         pass
@@ -116,7 +120,7 @@ def screen_stocks(markets: list[str]) -> pd.DataFrame:
                 ticker = batch[0]
                 if "Close" in raw.columns:
                     s = raw["Close"].dropna()
-                    if len(s) >= 25:
+                    if len(s) >= 125:
                         prices[ticker] = s
 
         except Exception as e:
@@ -125,7 +129,7 @@ def screen_stocks(markets: list[str]) -> pd.DataFrame:
         if i + BATCH_SIZE < len(tickers):
             time.sleep(BATCH_SLEEP)
 
-    print("\n套用篩選條件：20MA 向上 且 股價 < 5MA ...")
+    print("\n套用篩選條件：20MA 向上、股價 < 5MA、20MA > 60MA、60MA > 120MA ...")
     ticker_info = stock_list.set_index("yf_ticker").to_dict("index")
     records = []
 
@@ -133,8 +137,10 @@ def screen_stocks(markets: list[str]) -> pd.DataFrame:
         if not check_ma_pullback(close):
             continue
 
-        ma5 = float(close.rolling(5).mean().iloc[-1])
+        ma5  = float(close.rolling(5).mean().iloc[-1])
         ma20 = float(close.rolling(20).mean().iloc[-1])
+        ma60 = float(close.rolling(60).mean().iloc[-1])
+        ma120 = float(close.rolling(120).mean().iloc[-1])
         price = float(close.iloc[-1])
         info = ticker_info.get(ticker, {})
 
@@ -145,6 +151,8 @@ def screen_stocks(markets: list[str]) -> pd.DataFrame:
             "現價": round(price, 2),
             "5MA": round(ma5, 2),
             "20MA": round(ma20, 2),
+            "60MA": round(ma60, 2),
+            "120MA": round(ma120, 2),
             "價格/5MA%": round(price / ma5 * 100, 2),
             "screened_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         })
@@ -160,10 +168,11 @@ def screen_stocks(markets: list[str]) -> pd.DataFrame:
 
 
 def print_table(df: pd.DataFrame) -> None:
-    display_cols = ["代號", "名稱", "市場", "現價", "5MA", "20MA", "價格/5MA%"]
-    print("\n" + "=" * 65)
-    print(f"  篩選結果：共 {len(df)} 檔股票（20MA 向上 且 股價 < 5MA）")
-    print("=" * 65)
+    display_cols = ["代號", "名稱", "市場", "現價", "5MA", "20MA", "60MA", "120MA", "價格/5MA%"]
+    print("\n" + "=" * 75)
+    print(f"  篩選結果：共 {len(df)} 檔股票")
+    print(f"  條件：20MA 向上、股價 < 5MA、20MA > 60MA、60MA > 120MA")
+    print("=" * 75)
     print(tabulate(df[display_cols], headers="keys", tablefmt="simple", showindex=False))
 
 
@@ -202,7 +211,7 @@ def main():
 
     print("台股均線回檔篩選器")
     print(f"  市場：{', '.join(args.markets).upper()}")
-    print(f"  條件：20MA 向上（今日 > 5日前）且 股價 < 5MA")
+    print(f"  條件：20MA 向上（今日 > 5日前）、股價 < 5MA、20MA > 60MA、60MA > 120MA")
     print(f"  輸出：{output_path}\n")
 
     results = screen_stocks(markets=args.markets)
