@@ -3,7 +3,8 @@
 台股 5MA 向上突破篩選器
 
 篩選條件：
-  昨日收盤 < 5 日均線，且今日收盤 > 5 日均線（剛突破 5MA）
+  1. 昨日收盤 < 5MA，且今日收盤 > 5MA（剛突破 5MA）
+  2. 多頭排列：10MA > 20MA > 60MA
 
 股票清單來源：twstock 函式庫（上市 + 上櫃一般股票）
 
@@ -99,7 +100,7 @@ def fetch_prices_batch(tickers: list[str]) -> dict[str, pd.DataFrame]:
         try:
             raw = yf.download(
                 " ".join(batch),
-                period="3mo",
+                period="6mo",
                 auto_adjust=True,
                 progress=False,
                 threads=True,
@@ -111,7 +112,7 @@ def fetch_prices_batch(tickers: list[str]) -> dict[str, pd.DataFrame]:
                 for ticker in batch:
                     try:
                         close = raw["Close"][ticker].dropna()
-                        if len(close) >= 6:
+                        if len(close) >= 61:
                             results[ticker] = pd.DataFrame({"Close": close})
                     except KeyError:
                         pass
@@ -119,7 +120,7 @@ def fetch_prices_batch(tickers: list[str]) -> dict[str, pd.DataFrame]:
                 ticker = batch[0]
                 if "Close" in raw.columns:
                     close = raw["Close"].dropna()
-                    if len(close) >= 6:
+                    if len(close) >= 61:
                         results[ticker] = pd.DataFrame({"Close": close})
 
         except Exception as e:
@@ -134,34 +135,48 @@ def fetch_prices_batch(tickers: list[str]) -> dict[str, pd.DataFrame]:
 # ── 訊號計算 ──────────────────────────────────────────────────────────────────
 
 def calculate_signal(df: pd.DataFrame) -> dict | None:
-    """判斷是否昨日收盤 < MA5 且今日收盤 > MA5。
+    """判斷是否符合 5MA 突破 + 多頭排列（MA10 > MA20 > MA60）。
 
     Returns:
         dict with signal details, 或 None（不符合）
     """
-    if len(df) < 6:
+    if len(df) < 61:
         return None
 
     close = df["Close"]
-    ma5 = close.rolling(5).mean()
+    ma5  = close.rolling(5).mean()
+    ma10 = close.rolling(10).mean()
+    ma20 = close.rolling(20).mean()
+    ma60 = close.rolling(60).mean()
 
-    today_close = float(close.iloc[-1])
-    today_ma5 = float(ma5.iloc[-1])
+    today_close    = float(close.iloc[-1])
+    today_ma5      = float(ma5.iloc[-1])
+    today_ma10     = float(ma10.iloc[-1])
+    today_ma20     = float(ma20.iloc[-1])
+    today_ma60     = float(ma60.iloc[-1])
     yesterday_close = float(close.iloc[-2])
-    yesterday_ma5 = float(ma5.iloc[-2])
+    yesterday_ma5   = float(ma5.iloc[-2])
 
-    if pd.isna(today_ma5) or pd.isna(yesterday_ma5):
+    if any(pd.isna(v) for v in [today_ma5, today_ma10, today_ma20, today_ma60, yesterday_ma5]):
         return None
 
-    if yesterday_close < yesterday_ma5 and today_close > today_ma5:
-        return {
-            "現價": round(today_close, 2),
-            "昨收": round(yesterday_close, 2),
-            "MA5": round(today_ma5, 2),
-            "昨MA5": round(yesterday_ma5, 2),
-            "突破幅%": round((today_close / today_ma5 - 1) * 100, 2),
-        }
-    return None
+    # 5MA 昨下今上
+    if not (yesterday_close < yesterday_ma5 and today_close > today_ma5):
+        return None
+
+    # 多頭排列
+    if not (today_ma10 > today_ma20 > today_ma60):
+        return None
+
+    return {
+        "現價":   round(today_close, 2),
+        "昨收":   round(yesterday_close, 2),
+        "MA5":    round(today_ma5, 2),
+        "MA10":   round(today_ma10, 2),
+        "MA20":   round(today_ma20, 2),
+        "MA60":   round(today_ma60, 2),
+        "突破幅%": round((today_close / today_ma5 - 1) * 100, 2),
+    }
 
 
 # ── 主流程 ────────────────────────────────────────────────────────────────────
@@ -210,10 +225,10 @@ def screen_stocks(markets: list[str]) -> pd.DataFrame:
 
 
 def print_table(df: pd.DataFrame) -> None:
-    display_cols = ["代號", "名稱", "市場", "現價", "昨收", "MA5", "昨MA5", "突破幅%"]
-    print("\n" + "=" * 65)
-    print(f"  5MA 向上突破：共 {len(df)} 檔股票")
-    print("=" * 65)
+    display_cols = ["代號", "名稱", "市場", "現價", "昨收", "MA5", "MA10", "MA20", "MA60", "突破幅%"]
+    print("\n" + "=" * 75)
+    print(f"  5MA 向上突破（MA10 > MA20 > MA60）：共 {len(df)} 檔股票")
+    print("=" * 75)
     print(tabulate(df[display_cols], headers="keys", tablefmt="simple", showindex=False))
 
 
@@ -228,7 +243,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 篩選條件:
-  昨日收盤 < 5MA，且今日收盤 > 5MA（剛穿越 5 日均線向上）
+  1. 昨日收盤 < 5MA，且今日收盤 > 5MA（剛穿越 5 日均線向上）
+  2. 多頭排列：MA10 > MA20 > MA60
 
 範例:
   python screen_ma5_breakout.py
@@ -255,7 +271,7 @@ def main():
 
     print("台股 5MA 向上突破篩選器")
     print(f"  市場：{', '.join(args.markets).upper()}")
-    print(f"  條件：昨收 < MA5，且今收 > MA5")
+    print(f"  條件：昨收 < MA5，且今收 > MA5，且 MA10 > MA20 > MA60")
     print(f"  輸出：{output_path}\n")
 
     results = screen_stocks(markets=args.markets)
