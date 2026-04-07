@@ -225,12 +225,14 @@ def screen_stocks(volume_ratio: float, markets: list[str]) -> pd.DataFrame:
             continue
 
         info = ticker_to_info.get(ticker, {})
+        code = info.get("code", ticker)
         records.append({
-            "代號": info.get("code", ticker),
+            "代號": code,
             "名稱": info.get("name", ""),
             "市場": info.get("market", ""),
             **signal,
             "screened_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "技術圖": f"https://www.wantgoo.com/stock/{code}/technical-chart",
         })
 
     if not records:

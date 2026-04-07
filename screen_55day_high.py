@@ -211,14 +211,16 @@ def screen_stocks(threshold: float, markets: list[str]) -> pd.DataFrame:
             continue
 
         info = ticker_to_info.get(ticker, {})
+        code = info.get("code", ticker)
         records.append({
-            "代號": info.get("code", ticker),
+            "代號": code,
             "名稱": info.get("name", ""),
             "市場": info.get("market", ""),
             "現價": round(current_price, 2),
             "55天高點": round(high_55d, 2),
             "距高點%": round(ratio * 100, 2),
             "screened_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "技術圖": f"https://www.wantgoo.com/stock/{code}/technical-chart",
         })
 
     if not records:

@@ -32,3 +32,22 @@ if prices is None:
     prices = fetch_prices_batch(tickers)
     save_cache(prices, markets)
 ```
+
+## CSV 輸出必須附上 wantgoo 技術圖連結
+
+每支篩選器輸出 CSV 時，必須在 `records` 加入 `"技術圖"` 欄位，格式：
+
+```python
+"技術圖": f"https://www.wantgoo.com/stock/{code}/technical-chart"
+```
+
+範例（在 `records.append()` 的 dict 內）：
+
+```python
+code = info.get("code", ticker)
+records.append({
+    "代號": code,
+    ...
+    "技術圖": f"https://www.wantgoo.com/stock/{code}/technical-chart",
+})
+```
