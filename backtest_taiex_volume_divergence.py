@@ -33,19 +33,24 @@ from pathlib import Path
 
 import pandas as pd
 
-TAIEX_TICKER = "^TWII"
+def ticker_to_yf(ticker: str) -> str:
+    """將台股代碼轉換為 yfinance 格式（4 位數字自動加 .TW）。"""
+    if ticker.isdigit() and len(ticker) == 4:
+        return f"{ticker}.TW"
+    return ticker
 
 
-def fetch_from_yfinance(start: str, end: str) -> pd.DataFrame:
+def fetch_from_yfinance(ticker: str, start: str, end: str) -> pd.DataFrame:
     try:
         import yfinance as yf
     except ImportError:
         raise RuntimeError("請安裝 yfinance: pip install yfinance")
 
-    print(f"下載台股大盤（{TAIEX_TICKER}）歷史資料：{start} ~ {end}")
+    yf_ticker = ticker_to_yf(ticker)
+    print(f"下載 {ticker}（{yf_ticker}）歷史資料：{start} ~ {end}")
     try:
         raw = yf.download(
-            TAIEX_TICKER,
+            yf_ticker,
             start=start,
             end=end,
             auto_adjust=True,
@@ -60,8 +65,8 @@ def fetch_from_yfinance(start: str, end: str) -> pd.DataFrame:
 
     # 單檔下載仍可能產生 MultiIndex（與 screen_55day_high.py 處理方式一致）
     if isinstance(raw.columns, pd.MultiIndex):
-        close = raw["Close"][TAIEX_TICKER].dropna()
-        volume = raw["Volume"][TAIEX_TICKER].dropna()
+        close = raw["Close"][yf_ticker].dropna()
+        volume = raw["Volume"][yf_ticker].dropna()
         df = pd.DataFrame({"Close": close, "Volume": volume}).dropna()
     else:
         df = raw[["Close", "Volume"]].dropna()
@@ -115,22 +120,22 @@ def load_from_csv(path: str) -> pd.DataFrame:
     return result
 
 
-def fetch_data(csv_path: str | None, start: str, end: str) -> pd.DataFrame:
+def fetch_data(ticker: str, csv_path: str | None, start: str, end: str) -> pd.DataFrame:
     if csv_path:
         df = load_from_csv(csv_path)
-        # 過濾日期範圍
         df = df.loc[start:end]
     else:
-        df = fetch_from_yfinance(start, end)
+        df = fetch_from_yfinance(ticker, start, end)
 
     print(f"共 {len(df)} 個交易日（{df.index[0].date()} ~ {df.index[-1].date()}）\n")
 
-    print("【最近 10 個交易日資料】")
+    close_label = "收盤指數" if ticker in ("^TWII", "大盤") else "收盤價"
+    print(f"【最近 10 個交易日資料】")
     recent = df.tail(10).copy()
     recent.index = recent.index.strftime("%Y-%m-%d")
     recent["Close"] = recent["Close"].map(lambda x: f"{x:,.2f}")
     recent["Volume"] = recent["Volume"].map(lambda x: f"{x:,.0f}")
-    recent.columns = ["收盤指數", "成交量"]
+    recent.columns = [close_label, "成交量"]
     print(recent.to_string())
     print()
 
@@ -188,12 +193,12 @@ def run_backtest(df: pd.DataFrame) -> dict:
     }
 
 
-def print_results(result: dict, df: pd.DataFrame) -> None:
+def print_results(result: dict, df: pd.DataFrame, ticker: str) -> None:
     all_returns = df["Close"].pct_change().shift(-1).dropna()
     baseline_down = (all_returns < 0).mean() * 100
 
     print("=" * 65)
-    print(f"  台股大盤收盤創歷史新高 + 量縮 → 隔日下跌機率回測")
+    print(f"  {ticker} 收盤創歷史新高 + 量縮 → 隔日下跌機率回測")
     print("=" * 65)
     print()
     print("  【回測條件】")
@@ -290,18 +295,21 @@ def print_volume_distribution(result: dict) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="台股大盤創新高但量縮時隔日下跌機率回測",
+        description="台股創新高但量縮時隔日下跌機率回測",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 範例：
-  python backtest_taiex_volume_divergence.py --csv taiex.csv
-  python backtest_taiex_volume_divergence.py --csv taiex.csv --start 2010-01-01
+  python backtest_taiex_volume_divergence.py                        # 預設大盤
+  python backtest_taiex_volume_divergence.py --ticker 2330          # 台積電
+  python backtest_taiex_volume_divergence.py --ticker ^TWII --csv taiex.csv
 
-取得大盤歷史資料（CSV）：
-  Yahoo Finance → https://finance.yahoo.com/quote/%5ETWII/history/
+取得歷史資料（CSV）：
+  Yahoo Finance → https://finance.yahoo.com/quote/2330.TW/history/
   下載後用 --csv 參數指定路徑
         """,
     )
+    parser.add_argument("--ticker", type=str, default="^TWII",
+                        help="標的代碼，台股 4 碼會自動加 .TW（預設 ^TWII 大盤）")
     parser.add_argument("--csv", type=str, default=None,
                         help="本機 CSV 資料路徑（Date,Close,Volume 格式）")
     parser.add_argument("--start", type=str, default="1995-01-01",
@@ -311,7 +319,7 @@ def main():
     args = parser.parse_args()
 
     try:
-        df = fetch_data(args.csv, args.start, args.end)
+        df = fetch_data(args.ticker, args.csv, args.start, args.end)
     except (RuntimeError, FileNotFoundError) as e:
         print(f"\n錯誤：{e}", file=sys.stderr)
         print("\n請提供本機 CSV 資料：", file=sys.stderr)
@@ -321,7 +329,7 @@ def main():
         sys.exit(1)
 
     result = run_backtest(df)
-    print_results(result, df)
+    print_results(result, df, args.ticker)
 
 
 if __name__ == "__main__":
