@@ -1,0 +1,272 @@
+#!/usr/bin/env python3
+"""
+台股大盤創新高但量縮隔日下跌機率回測
+
+回測條件：
+  1. 當日收盤 創 N 日新高（收盤超越過去 N 個交易日最高收盤）
+  2. 當日成交量 未創 N 日新高（成交量 <= 過去 N 日最大量）
+
+分析：滿足以上條件時，隔日下跌的機率是多少。
+
+資料來源（擇一）：
+  A. 本機 CSV 檔（--csv 參數指定路徑）
+     格式：Date,Close,Volume（逗號分隔，Date 格式 YYYY-MM-DD）
+     可從 Yahoo Finance 或 TWSE 手動下載
+  B. yfinance 自動下載（需網路連線）
+
+取得資料方式：
+  ① Yahoo Finance：https://finance.yahoo.com/quote/%5ETWII/history/
+     下載後指定 --csv 路徑即可
+  ② TWSE API：https://www.twse.com.tw/zh/trading/historical/fmtqik.html
+
+用法：
+  python backtest_taiex_volume_divergence.py --csv taiex.csv
+  python backtest_taiex_volume_divergence.py --csv taiex.csv --lookback 55
+  python backtest_taiex_volume_divergence.py --csv taiex.csv --compare
+  python backtest_taiex_volume_divergence.py  # 嘗試 yfinance（需網路）
+"""
+
+import argparse
+import sys
+from datetime import datetime
+from pathlib import Path
+
+import pandas as pd
+
+TAIEX_TICKER = "^TWII"
+
+
+def fetch_from_yfinance(start: str, end: str) -> pd.DataFrame:
+    try:
+        import yfinance as yf
+    except ImportError:
+        raise RuntimeError("請安裝 yfinance: pip install yfinance")
+
+    print(f"下載台股大盤（{TAIEX_TICKER}）歷史資料：{start} ~ {end}")
+    df = yf.download(TAIEX_TICKER, start=start, end=end, auto_adjust=True, progress=False)
+    if df.empty:
+        raise RuntimeError("yfinance 下載失敗，請改用 --csv 選項提供本機資料")
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    df = df[["Close", "Volume"]].dropna()
+    df.index = pd.to_datetime(df.index)
+    return df.sort_index()
+
+
+def load_from_csv(path: str) -> pd.DataFrame:
+    """
+    支援以下 CSV 格式：
+    - Yahoo Finance 格式：Date,Open,High,Low,Close,Adj Close,Volume
+    - 精簡格式：Date,Close,Volume
+    - TWSE 格式（自動偵測）
+    """
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"找不到檔案：{path}")
+
+    print(f"讀取本機資料：{path}")
+
+    # 嘗試自動偵測分隔符
+    raw = p.read_text(encoding="utf-8-sig")
+    sep = "," if raw.count(",") > raw.count("\t") else "\t"
+
+    df = pd.read_csv(path, sep=sep, encoding="utf-8-sig")
+    df.columns = df.columns.str.strip()
+
+    # 找出日期欄
+    date_col = next((c for c in df.columns if "date" in c.lower() or "日期" in c), None)
+    if date_col is None:
+        raise ValueError(f"找不到日期欄位，現有欄位：{list(df.columns)}")
+
+    # 找出收盤欄
+    close_col = next((c for c in df.columns if c.lower() in ("close", "adj close", "收盤", "收盤價")), None)
+    if close_col is None:
+        raise ValueError(f"找不到收盤價欄位，現有欄位：{list(df.columns)}")
+
+    # 找出成交量欄
+    vol_col = next((c for c in df.columns if c.lower() in ("volume", "成交量", "成交股數", "成交金額")), None)
+    if vol_col is None:
+        raise ValueError(f"找不到成交量欄位，現有欄位：{list(df.columns)}")
+
+    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+    df[close_col] = pd.to_numeric(df[close_col].astype(str).str.replace(",", ""), errors="coerce")
+    df[vol_col] = pd.to_numeric(df[vol_col].astype(str).str.replace(",", ""), errors="coerce")
+
+    result = df[[date_col, close_col, vol_col]].copy()
+    result.columns = ["Date", "Close", "Volume"]
+    result = result.dropna().set_index("Date").sort_index()
+    return result
+
+
+def fetch_data(csv_path: str | None, start: str, end: str) -> pd.DataFrame:
+    if csv_path:
+        df = load_from_csv(csv_path)
+        # 過濾日期範圍
+        df = df.loc[start:end]
+    else:
+        df = fetch_from_yfinance(start, end)
+
+    print(f"共 {len(df)} 個交易日（{df.index[0].date()} ~ {df.index[-1].date()}）\n")
+    return df
+
+
+def run_backtest(df: pd.DataFrame, lookback: int) -> dict:
+    """
+    lookback: 回顧窗口（交易日數），判斷「創新高」與「最大量」的基準期間
+
+    創新高定義：當日收盤 > 前 lookback 個交易日的最高收盤
+    量縮定義  ：當日成交量 <= 前 lookback 個交易日的最大成交量
+    """
+    close = df["Close"]
+    volume = df["Volume"]
+
+    # 不含當日，往前看 lookback 天的最大值
+    rolling_max_close = close.shift(1).rolling(window=lookback, min_periods=lookback).max()
+    rolling_max_volume = volume.shift(1).rolling(window=lookback, min_periods=lookback).max()
+
+    new_high = close > rolling_max_close          # 條件①
+    volume_not_max = volume <= rolling_max_volume  # 條件②（量沒有同步創新高）
+
+    signal = new_high & volume_not_max
+
+    # 隔日報酬（+1 代表下一個交易日）
+    next_day_return = close.pct_change().shift(-1)
+
+    returns_on_signal = next_day_return[signal].dropna()
+    total = len(returns_on_signal)
+    down = (returns_on_signal < 0).sum()
+    up = (returns_on_signal > 0).sum()
+    flat = (returns_on_signal == 0).sum()
+
+    # 另外統計：創新高（不論量）時的隔日表現
+    all_new_high_returns = next_day_return[new_high].dropna()
+    all_new_high_down_pct = (all_new_high_returns < 0).mean() * 100 if len(all_new_high_returns) > 0 else 0
+
+    return {
+        "lookback": lookback,
+        "total_signals": total,
+        "down_count": int(down),
+        "up_count": int(up),
+        "flat_count": int(flat),
+        "down_pct": down / total * 100 if total > 0 else 0,
+        "up_pct": up / total * 100 if total > 0 else 0,
+        "avg_next_return_pct": float(returns_on_signal.mean() * 100) if total > 0 else 0,
+        "median_next_return_pct": float(returns_on_signal.median() * 100) if total > 0 else 0,
+        "signal_dates": df.index[signal],
+        "returns": returns_on_signal,
+        "all_new_high_count": len(all_new_high_returns),
+        "all_new_high_down_pct": all_new_high_down_pct,
+    }
+
+
+def print_results(result: dict, df: pd.DataFrame) -> None:
+    lb = result["lookback"]
+    all_returns = df["Close"].pct_change().shift(-1).dropna()
+    baseline_down = (all_returns < 0).mean() * 100
+
+    print("=" * 65)
+    print(f"  台股大盤創新高 + 量縮 → 隔日下跌機率回測")
+    print(f"  回顧窗口：{lb} 個交易日（約 {lb//5} 週）")
+    print("=" * 65)
+    print()
+    print("  【回測條件】")
+    print(f"  ① 當日收盤 突破前 {lb} 個交易日最高收盤（創新高）")
+    print(f"  ② 當日成交量 未突破前 {lb} 個交易日最大量（量縮背離）")
+    print()
+    print("  【統計結果】")
+    print(f"  滿足雙條件的交易日：{result['total_signals']} 次")
+    print()
+    print(f"  隔日下跌：{result['down_count']:>4} 次  {result['down_pct']:>6.1f}%  ← 目標機率")
+    print(f"  隔日上漲：{result['up_count']:>4} 次  {result['up_pct']:>6.1f}%")
+    print(f"  隔日平盤：{result['flat_count']:>4} 次")
+    print()
+    print(f"  隔日平均報酬：{result['avg_next_return_pct']:+.3f}%")
+    print(f"  隔日中位數報酬：{result['median_next_return_pct']:+.3f}%")
+    print()
+    print("  【與基準比較】")
+    print(f"  所有交易日 隔日下跌機率：{baseline_down:.1f}%  （基準）")
+    print(f"  創新高（任意量）隔日下跌：{result['all_new_high_down_pct']:.1f}%  "
+          f"（共 {result['all_new_high_count']} 次）")
+    print(f"  創新高 + 量縮 隔日下跌：{result['down_pct']:.1f}%  "
+          f"← 比基準 {result['down_pct'] - baseline_down:+.1f} 個百分點")
+    print()
+
+    # 最近 10 筆訊號
+    recent = result["signal_dates"][-10:]
+    recent_returns = result["returns"].reindex(recent).dropna()
+    if len(recent) > 0:
+        print(f"  【最近 {len(recent)} 筆訊號】")
+        for dt in recent:
+            r = recent_returns.get(dt)
+            if r is not None:
+                arrow = "↓" if r < 0 else "↑" if r > 0 else "─"
+                print(f"    {dt.date()}  隔日 {arrow} {r*100:+.2f}%")
+    print("=" * 65)
+
+
+def compare_lookbacks(df: pd.DataFrame) -> None:
+    lookbacks = [20, 55, 120, 252]
+    all_returns = df["Close"].pct_change().shift(-1).dropna()
+    baseline = (all_returns < 0).mean() * 100
+
+    print("\n【不同回顧窗口比較】（基準下跌機率 {:.1f}%）\n".format(baseline))
+    rows = []
+    for lb in lookbacks:
+        r = run_backtest(df, lb)
+        rows.append({
+            "回顧窗口": f"{lb}日(≈{lb//5}週)",
+            "訊號次數": r["total_signals"],
+            "隔日下跌次數": r["down_count"],
+            "下跌機率": f"{r['down_pct']:.1f}%",
+            "vs 基準": f"{r['down_pct'] - baseline:+.1f}pp",
+            "平均隔日報酬": f"{r['avg_next_return_pct']:+.3f}%",
+        })
+    print(pd.DataFrame(rows).to_string(index=False))
+    print()
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="台股大盤創新高但量縮時隔日下跌機率回測",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+範例：
+  python backtest_taiex_volume_divergence.py --csv taiex.csv
+  python backtest_taiex_volume_divergence.py --csv taiex.csv --lookback 55 --compare
+
+取得大盤歷史資料（CSV）：
+  Yahoo Finance → https://finance.yahoo.com/quote/%5ETWII/history/
+  下載後用 --csv 參數指定路徑
+        """,
+    )
+    parser.add_argument("--csv", type=str, default=None,
+                        help="本機 CSV 資料路徑（Date,Close,Volume 格式）")
+    parser.add_argument("--lookback", type=int, default=55,
+                        help="回顧窗口（交易日數），預設 55（海龜系統）")
+    parser.add_argument("--start", type=str, default="1995-01-01",
+                        help="回測起始日期（預設 1995-01-01）")
+    parser.add_argument("--end", type=str, default=datetime.today().strftime("%Y-%m-%d"),
+                        help="回測結束日期（預設今天）")
+    parser.add_argument("--compare", action="store_true",
+                        help="同時比較 20/55/120/252 日等多個回顧窗口")
+    args = parser.parse_args()
+
+    try:
+        df = fetch_data(args.csv, args.start, args.end)
+    except (RuntimeError, FileNotFoundError) as e:
+        print(f"\n錯誤：{e}", file=sys.stderr)
+        print("\n請提供本機 CSV 資料：", file=sys.stderr)
+        print("  1. 前往 https://finance.yahoo.com/quote/%5ETWII/history/", file=sys.stderr)
+        print("  2. 下載歷史資料為 CSV", file=sys.stderr)
+        print("  3. 執行：python backtest_taiex_volume_divergence.py --csv <檔案路徑>", file=sys.stderr)
+        sys.exit(1)
+
+    if args.compare:
+        compare_lookbacks(df)
+
+    result = run_backtest(df, args.lookback)
+    print_results(result, df)
+
+
+if __name__ == "__main__":
+    main()
