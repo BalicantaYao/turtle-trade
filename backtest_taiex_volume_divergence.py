@@ -124,6 +124,16 @@ def fetch_data(csv_path: str | None, start: str, end: str) -> pd.DataFrame:
         df = fetch_from_yfinance(start, end)
 
     print(f"共 {len(df)} 個交易日（{df.index[0].date()} ~ {df.index[-1].date()}）\n")
+
+    print("【最近 10 個交易日資料】")
+    recent = df.tail(10).copy()
+    recent.index = recent.index.strftime("%Y-%m-%d")
+    recent["Close"] = recent["Close"].map(lambda x: f"{x:,.2f}")
+    recent["Volume"] = recent["Volume"].map(lambda x: f"{x:,.0f}")
+    recent.columns = ["收盤指數", "成交量"]
+    print(recent.to_string())
+    print()
+
     return df
 
 
