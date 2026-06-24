@@ -43,12 +43,29 @@ def fetch_from_yfinance(start: str, end: str) -> pd.DataFrame:
         raise RuntimeError("請安裝 yfinance: pip install yfinance")
 
     print(f"下載台股大盤（{TAIEX_TICKER}）歷史資料：{start} ~ {end}")
-    df = yf.download(TAIEX_TICKER, start=start, end=end, auto_adjust=True, progress=False)
-    if df.empty:
-        raise RuntimeError("yfinance 下載失敗，請改用 --csv 選項提供本機資料")
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    df = df[["Close", "Volume"]].dropna()
+    try:
+        raw = yf.download(
+            TAIEX_TICKER,
+            start=start,
+            end=end,
+            auto_adjust=True,
+            progress=False,
+            threads=True,
+        )
+    except Exception as e:
+        raise RuntimeError(f"yfinance 下載失敗：{e}，請改用 --csv 選項提供本機資料")
+
+    if raw.empty:
+        raise RuntimeError("yfinance 回傳空資料，請改用 --csv 選項提供本機資料")
+
+    # 單檔下載仍可能產生 MultiIndex（與 screen_55day_high.py 處理方式一致）
+    if isinstance(raw.columns, pd.MultiIndex):
+        close = raw["Close"][TAIEX_TICKER].dropna()
+        volume = raw["Volume"][TAIEX_TICKER].dropna()
+        df = pd.DataFrame({"Close": close, "Volume": volume}).dropna()
+    else:
+        df = raw[["Close", "Volume"]].dropna()
+
     df.index = pd.to_datetime(df.index)
     return df.sort_index()
 
