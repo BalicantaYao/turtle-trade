@@ -137,7 +137,7 @@ def fetch_data(csv_path: str | None, start: str, end: str) -> pd.DataFrame:
     return df
 
 
-def run_backtest(df: pd.DataFrame, volume_lookback: int) -> dict:
+def run_backtest(df: pd.DataFrame) -> dict:
     """
     創新高定義  ：當日收盤 > 歷史最高收盤（cummax，不含當日）
     量縮定義    ：當日成交量 <= 前 volume_lookback 個交易日的最大成交量
@@ -147,11 +147,9 @@ def run_backtest(df: pd.DataFrame, volume_lookback: int) -> dict:
 
     # 收盤創歷史新高（累積最大值，不含當日）
     hist_max_close = close.shift(1).cummax()
-    # 成交量未創近期新高（滾動窗口，不含當日）
-    rolling_max_volume = volume.shift(1).rolling(window=volume_lookback, min_periods=volume_lookback).max()
 
-    new_high = close > hist_max_close             # 條件①：收盤創歷史新高
-    volume_not_max = volume <= rolling_max_volume  # 條件②：量未創近期新高
+    new_high = close > hist_max_close        # 條件①：收盤創歷史新高
+    volume_not_max = volume <= volume.shift(1)  # 條件②：量未超過前一天（量縮）
 
     signal = new_high & volume_not_max
 
@@ -169,7 +167,6 @@ def run_backtest(df: pd.DataFrame, volume_lookback: int) -> dict:
     all_new_high_down_pct = (all_new_high_returns < 0).mean() * 100 if len(all_new_high_returns) > 0 else 0
 
     return {
-        "volume_lookback": volume_lookback,
         "total_signals": total,
         "down_count": int(down),
         "up_count": int(up),
@@ -186,18 +183,16 @@ def run_backtest(df: pd.DataFrame, volume_lookback: int) -> dict:
 
 
 def print_results(result: dict, df: pd.DataFrame) -> None:
-    vl = result["volume_lookback"]
     all_returns = df["Close"].pct_change().shift(-1).dropna()
     baseline_down = (all_returns < 0).mean() * 100
 
     print("=" * 65)
     print(f"  台股大盤收盤創歷史新高 + 量縮 → 隔日下跌機率回測")
-    print(f"  量縮判斷窗口：{vl} 個交易日（約 {vl//5} 週）")
     print("=" * 65)
     print()
     print("  【回測條件】")
     print(f"  ① 當日收盤 創歷史新高（超越所有歷史收盤最高價）")
-    print(f"  ② 當日成交量 未超越前 {vl} 個交易日最大量（量縮背離）")
+    print(f"  ② 當日成交量 未超過前一個交易日成交量（量縮）")
     print()
     print("  【統計結果】")
     print(f"  滿足雙條件的交易日：{result['total_signals']} 次")
@@ -230,27 +225,6 @@ def print_results(result: dict, df: pd.DataFrame) -> None:
     print("=" * 65)
 
 
-def compare_lookbacks(df: pd.DataFrame) -> None:
-    lookbacks = [20, 55, 120, 252]
-    all_returns = df["Close"].pct_change().shift(-1).dropna()
-    baseline = (all_returns < 0).mean() * 100
-
-    print("\n【不同量縮判斷窗口比較】收盤均以歷史新高為基準（基準下跌機率 {:.1f}%）\n".format(baseline))
-    rows = []
-    for lb in lookbacks:
-        r = run_backtest(df, lb)
-        rows.append({
-            "量縮窗口": f"{lb}日(≈{lb//5}週)",
-            "訊號次數": r["total_signals"],
-            "隔日下跌次數": r["down_count"],
-            "下跌機率": f"{r['down_pct']:.1f}%",
-            "vs 基準": f"{r['down_pct'] - baseline:+.1f}pp",
-            "平均隔日報酬": f"{r['avg_next_return_pct']:+.3f}%",
-        })
-    print(pd.DataFrame(rows).to_string(index=False))
-    print()
-
-
 def main():
     parser = argparse.ArgumentParser(
         description="台股大盤創新高但量縮時隔日下跌機率回測",
@@ -258,7 +232,7 @@ def main():
         epilog="""
 範例：
   python backtest_taiex_volume_divergence.py --csv taiex.csv
-  python backtest_taiex_volume_divergence.py --csv taiex.csv --lookback 55 --compare
+  python backtest_taiex_volume_divergence.py --csv taiex.csv --start 2010-01-01
 
 取得大盤歷史資料（CSV）：
   Yahoo Finance → https://finance.yahoo.com/quote/%5ETWII/history/
@@ -267,14 +241,10 @@ def main():
     )
     parser.add_argument("--csv", type=str, default=None,
                         help="本機 CSV 資料路徑（Date,Close,Volume 格式）")
-    parser.add_argument("--volume-lookback", type=int, default=55, dest="volume_lookback",
-                        help="量縮判斷窗口（交易日數），預設 55（海龜系統）")
     parser.add_argument("--start", type=str, default="1995-01-01",
                         help="回測起始日期（預設 1995-01-01）")
     parser.add_argument("--end", type=str, default=datetime.today().strftime("%Y-%m-%d"),
                         help="回測結束日期（預設今天）")
-    parser.add_argument("--compare", action="store_true",
-                        help="同時比較量縮窗口 20/55/120/252 日")
     args = parser.parse_args()
 
     try:
@@ -287,10 +257,7 @@ def main():
         print("  3. 執行：python backtest_taiex_volume_divergence.py --csv <檔案路徑>", file=sys.stderr)
         sys.exit(1)
 
-    if args.compare:
-        compare_lookbacks(df)
-
-    result = run_backtest(df, args.volume_lookback)
+    result = run_backtest(df)
     print_results(result, df)
 
 
