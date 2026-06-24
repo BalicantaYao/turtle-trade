@@ -121,11 +121,19 @@ def load_from_csv(path: str) -> pd.DataFrame:
 
 
 def fetch_data(ticker: str, csv_path: str | None, start: str, end: str) -> pd.DataFrame:
-    if csv_path:
+    # 決定預設 CSV 快取路徑（與代碼同名）
+    default_csv = f"{ticker.replace('^', '').replace('.', '_')}.csv"
+
+    if csv_path and Path(csv_path).exists():
         df = load_from_csv(csv_path)
         df = df.loc[start:end]
     else:
+        if csv_path:
+            print(f"找不到 {csv_path}，改為自動下載...")
         df = fetch_from_yfinance(ticker, start, end)
+        save_path = csv_path or default_csv
+        df.to_csv(save_path, index=True, encoding="utf-8-sig")
+        print(f"資料已儲存至 {save_path}，下次可直接使用 --csv {save_path}")
 
     print(f"共 {len(df)} 個交易日（{df.index[0].date()} ~ {df.index[-1].date()}）\n")
 
@@ -321,11 +329,10 @@ def main():
     try:
         df = fetch_data(args.ticker, args.csv, args.start, args.end)
     except (RuntimeError, FileNotFoundError) as e:
+        yf_ticker = ticker_to_yf(args.ticker)
         print(f"\n錯誤：{e}", file=sys.stderr)
-        print("\n請提供本機 CSV 資料：", file=sys.stderr)
-        print("  1. 前往 https://finance.yahoo.com/quote/%5ETWII/history/", file=sys.stderr)
-        print("  2. 下載歷史資料為 CSV", file=sys.stderr)
-        print("  3. 執行：python backtest_taiex_volume_divergence.py --csv <檔案路徑>", file=sys.stderr)
+        print(f"\n請手動下載 CSV 後用 --csv 指定：", file=sys.stderr)
+        print(f"  Yahoo Finance: https://finance.yahoo.com/quote/{yf_ticker}/history/", file=sys.stderr)
         sys.exit(1)
 
     result = run_backtest(df)
