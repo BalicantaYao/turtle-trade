@@ -140,7 +140,7 @@ def fetch_data(csv_path: str | None, start: str, end: str) -> pd.DataFrame:
 def run_backtest(df: pd.DataFrame) -> dict:
     """
     創新高定義  ：當日收盤 > 歷史最高收盤（cummax，不含當日）
-    量縮定義    ：當日成交量 <= 前 volume_lookback 個交易日的最大成交量
+    量縮定義    ：當日成交量 <= 前一個交易日成交量
     """
     close = df["Close"]
     volume = df["Volume"]
@@ -148,7 +148,7 @@ def run_backtest(df: pd.DataFrame) -> dict:
     # 收盤創歷史新高（累積最大值，不含當日）
     hist_max_close = close.shift(1).cummax()
 
-    new_high = close > hist_max_close        # 條件①：收盤創歷史新高
+    new_high = close > hist_max_close           # 條件①：收盤創歷史新高
     volume_not_max = volume <= volume.shift(1)  # 條件②：量未超過前一天（量縮）
 
     signal = new_high & volume_not_max
@@ -156,7 +156,12 @@ def run_backtest(df: pd.DataFrame) -> dict:
     # 隔日報酬（+1 代表下一個交易日）
     next_day_return = close.pct_change().shift(-1)
 
+    # 相較前一天的成交量落差（%）
+    volume_chg_pct = (volume / volume.shift(1) - 1) * 100
+
     returns_on_signal = next_day_return[signal].dropna()
+    vol_chg_on_signal = volume_chg_pct[signal].reindex(returns_on_signal.index)
+
     total = len(returns_on_signal)
     down = (returns_on_signal < 0).sum()
     up = (returns_on_signal > 0).sum()
@@ -177,6 +182,7 @@ def run_backtest(df: pd.DataFrame) -> dict:
         "median_next_return_pct": float(returns_on_signal.median() * 100) if total > 0 else 0,
         "signal_dates": df.index[signal],
         "returns": returns_on_signal,
+        "vol_chg_pct": vol_chg_on_signal,
         "all_new_high_count": len(all_new_high_returns),
         "all_new_high_down_pct": all_new_high_down_pct,
     }
@@ -223,6 +229,63 @@ def print_results(result: dict, df: pd.DataFrame) -> None:
                 arrow = "↓" if r < 0 else "↑" if r > 0 else "─"
                 print(f"    {dt.date()}  隔日 {arrow} {r*100:+.2f}%")
     print("=" * 65)
+
+    # 成交量落差分布統計
+    print_volume_distribution(result)
+
+
+def print_volume_distribution(result: dict) -> None:
+    """成交量相較前一天落差（%）的分布，並區分隔日上漲 vs 下跌。"""
+    vol_chg = result["vol_chg_pct"]
+    returns = result["returns"]
+
+    up_mask = returns > 0
+    down_mask = returns < 0
+
+    vol_up = vol_chg[up_mask].dropna()
+    vol_down = vol_chg[down_mask].dropna()
+
+    bins = [-100, -50, -30, -20, -10, -5, 0]  # 全部 <= 0（量縮條件）
+
+    def dist_row(label: str, series: pd.Series) -> list:
+        if series.empty:
+            return [label, 0] + [0] * len(bins)
+        counts = pd.cut(series, bins=bins + [0.001], right=True).value_counts(sort=False)
+        return [label, len(series)] + counts.tolist()
+
+    col_labels = [f"{bins[i]}~{bins[i+1]}%" for i in range(len(bins) - 1)] + ["~0%"]
+
+    print()
+    print("【成交量相較前一天落差分布（僅含量縮訊號日）】")
+    print(f"  落差區間 = (當日量 - 前日量) / 前日量 × 100")
+    print()
+
+    header = f"  {'':8}  {'次數':>4}  " + "  ".join(f"{c:>10}" for c in col_labels)
+    print(header)
+    print("  " + "-" * (len(header) - 2))
+
+    for label, series in [("隔日上漲", vol_up), ("隔日下跌", vol_down), ("全部訊號", vol_chg.dropna())]:
+        if series.empty:
+            continue
+        cuts = pd.cut(series, bins=bins + [0.001], right=True)
+        counts = cuts.value_counts(sort=False)
+        pcts = (counts / len(series) * 100).round(1)
+        count_str = "  ".join(f"{c:>4}({p:>4.1f}%)" for c, p in zip(counts, pcts))
+        print(f"  {label:8}  {len(series):>4}  {count_str}")
+
+    print()
+    # 摘要：各組的平均隔日報酬
+    print("  【各落差區間的平均隔日報酬】")
+    analysis = pd.DataFrame({"vol_chg": vol_chg, "next_ret": returns}).dropna()
+    analysis["區間"] = pd.cut(analysis["vol_chg"], bins=bins + [0.001], right=True)
+    summary = analysis.groupby("區間", observed=True)["next_ret"].agg(
+        次數="count",
+        下跌次數=lambda x: (x < 0).sum(),
+        下跌率=lambda x: f"{(x < 0).mean()*100:.1f}%",
+        平均報酬=lambda x: f"{x.mean()*100:+.3f}%",
+    )
+    print(summary.to_string())
+    print()
 
 
 def main():
